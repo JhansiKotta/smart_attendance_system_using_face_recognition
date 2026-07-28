@@ -5,10 +5,8 @@ import pandas as pd
 import pickle
 from datetime import datetime
 from PIL import Image
-import os
 
-st.write("Current Directory:", os.getcwd())
-st.write("Files in Directory:", os.listdir("."))
+
 
 # ---------------- PAGE CONFIG ----------------
 
@@ -86,10 +84,10 @@ def load_model():
 
 try:
     recognizer, detector, names = load_model()
-except:
-    st.error("Model files are missing.")
-    st.stop()
 
+except Exception as e:
+    st.exception(e)
+    st.stop()
 # ---------------- SIDEBAR ----------------
 
 st.sidebar.image(
