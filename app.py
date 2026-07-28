@@ -7,68 +7,60 @@ from datetime import datetime
 from PIL import Image
 
 
-# ---------------- PAGE CONFIG ----------------
+# ================= PAGE CONFIG =================
 
 st.set_page_config(
-    page_title="Smart Attendance AI",
-    page_icon="🎓",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="AI Smart Attendance System",
+    page_icon="🤖",
+    layout="wide"
 )
 
 
-# ---------------- STYLE ----------------
+# ================= CUSTOM DESIGN =================
 
 st.markdown(
 """
 <style>
 
-body {
-    background-color:#f5f7fb;
+body{
+background:#f5f7fb;
 }
 
 
-.main-title {
-    font-size:50px;
-    font-weight:800;
-    color:#12355b;
-    text-align:center;
+.main-title{
+font-size:55px;
+font-weight:900;
+text-align:center;
+color:#0B3D91;
 }
 
 
-.subtitle {
-    font-size:22px;
-    text-align:center;
-    color:#555;
+.tagline{
+font-size:24px;
+text-align:center;
+color:#555;
 }
 
 
-.card {
-
-    background:white;
-    padding:25px;
-    border-radius:20px;
-    box-shadow:0px 5px 20px rgba(0,0,0,0.1);
-    text-align:center;
-
+.card{
+background:white;
+padding:25px;
+border-radius:20px;
+box-shadow:0px 8px 25px rgba(0,0,0,0.12);
+text-align:center;
 }
 
 
-.section {
-
-    font-size:35px;
-    font-weight:bold;
-    color:#12355b;
-
+.feature{
+font-size:18px;
+line-height:2;
 }
 
 
-.stButton button {
-
-    border-radius:15px;
-    height:50px;
-    font-size:18px;
-
+.section-title{
+font-size:35px;
+font-weight:800;
+color:#0B3D91;
 }
 
 
@@ -79,7 +71,7 @@ unsafe_allow_html=True
 
 
 
-# ---------------- LOAD MODEL ----------------
+# ================= LOAD MODEL =================
 
 
 @st.cache_resource
@@ -100,9 +92,9 @@ def load_model():
     with open(
         "names.pkl",
         "rb"
-    ) as file:
+    ) as f:
 
-        names = pickle.load(file)
+        names = pickle.load(f)
 
 
     return recognizer, detector, names
@@ -113,50 +105,44 @@ try:
 
     recognizer, detector, names = load_model()
 
-
-except:
+except Exception as e:
 
     st.error(
-        "Required model files are missing."
+        "Model files are missing. Upload trainer.yml, names.pkl and Haar Cascade file."
     )
 
     st.stop()
 
 
 
-# ---------------- SIDEBAR ----------------
-
-
-st.sidebar.title(
-    "🎓 Smart Attendance AI"
-)
+# ================= SIDEBAR =================
 
 
 st.sidebar.markdown(
 """
+# 🤖 AI Attendance
+
+Smart Face Recognition System
+
 ---
-### Navigation
-
-Choose a module:
-
 """
 )
 
 
 page = st.sidebar.radio(
-    "",
+    "Navigation",
     [
         "🏠 Home",
-        "🤖 AI Recognition",
-        "📊 Attendance Dashboard",
-        "🚀 Project Details"
+        "🧠 Recognition",
+        "📊 Analytics",
+        "🚀 Project Info"
     ]
 )
 
 
 
 # ==================================================
-# HOME
+# HOME PAGE
 # ==================================================
 
 
@@ -166,11 +152,11 @@ if page=="🏠 Home":
     st.markdown(
     """
     <div class="main-title">
-    🎓 Smart Attendance System
+    🤖 AI Smart Attendance System
     </div>
 
-    <div class="subtitle">
-    AI Powered Face Recognition Attendance Management System
+    <div class="tagline">
+    Machine Learning Based Face Recognition Attendance Platform
     </div>
 
     """,
@@ -182,39 +168,49 @@ if page=="🏠 Home":
 
 
     st.success(
-        "🚀 Artificial Intelligence System Online"
+        "🟢 AI Model Loaded Successfully"
     )
 
 
+
     st.markdown(
-    "## 🌟 About The Project"
+    """
+    <div class="section-title">
+    About The Project
+    </div>
+    """,
+    unsafe_allow_html=True
     )
 
 
     st.write(
 """
-Smart Attendance System is an AI based attendance
-automation platform that uses Computer Vision technology
-to identify individuals and automatically record attendance.
+Smart Attendance System is an Artificial Intelligence
+based attendance automation solution.
 
-The system replaces traditional manual attendance methods
-with a faster, smarter and more accurate solution.
+It uses Computer Vision and Machine Learning algorithms
+to detect faces, recognize registered users and generate
+attendance records automatically.
 """
 )
 
 
 
     st.markdown(
-    "## ✨ Key Features"
+    """
+    <div class="section-title">
+    Key Features
+    </div>
+    """,
+    unsafe_allow_html=True
     )
 
 
 
-    c1,c2,c3 = st.columns(3)
+    c1,c2,c3,c4 = st.columns(4)
 
 
     with c1:
-
         st.markdown(
         """
         <div class="card">
@@ -223,8 +219,7 @@ with a faster, smarter and more accurate solution.
 
         ### Face Detection
 
-        Detects human faces
-        using Haar Cascade.
+        Haar Cascade
 
         </div>
         """,
@@ -233,17 +228,15 @@ with a faster, smarter and more accurate solution.
 
 
     with c2:
-
         st.markdown(
         """
         <div class="card">
 
-        🤖
+        🧠
 
-        ### Face Recognition
+        ### Recognition
 
-        Identifies users
-        using LBPH algorithm.
+        LBPH Model
 
         </div>
         """,
@@ -252,17 +245,32 @@ with a faster, smarter and more accurate solution.
 
 
     with c3:
-
         st.markdown(
         """
         <div class="card">
 
         📋
 
-        ### Smart Attendance
+        ### Attendance
 
-        Automatically saves
-        attendance records.
+        Auto Records
+
+        </div>
+        """,
+        unsafe_allow_html=True
+        )
+
+
+    with c4:
+        st.markdown(
+        """
+        <div class="card">
+
+        📊
+
+        ### Analytics
+
+        Reports
 
         </div>
         """,
@@ -271,79 +279,53 @@ with a faster, smarter and more accurate solution.
 
 
 
-
     st.markdown(
-    "## 🛠 Technology Stack"
+    """
+    ## ⚙️ Machine Learning Pipeline
+
+    Dataset  
+    ↓  
+    Face Detection  
+    ↓  
+    Image Processing  
+    ↓  
+    Feature Extraction  
+    ↓  
+    LBPH Training  
+    ↓  
+    Face Prediction  
+    ↓  
+    Attendance Generation
+
+    """
     )
-
-
-    tech1,tech2,tech3,tech4 = st.columns(4)
-
-
-    tech1.info("🐍 Python")
-    tech2.info("👁 OpenCV")
-    tech3.info("📊 Pandas")
-    tech4.info("🌐 Streamlit")
-
-
-
-
-    st.markdown(
-    "## 🔄 System Workflow"
-    )
-
-
-    st.write(
-"""
-1️⃣ Collect Face Dataset
-
-⬇
-
-2️⃣ Train Recognition Model
-
-⬇
-
-3️⃣ Detect Face
-
-⬇
-
-4️⃣ Recognize Person
-
-⬇
-
-5️⃣ Store Attendance With Time
-"""
-)
 
 
 
 # ==================================================
-# RECOGNITION
+# RECOGNITION PAGE
 # ==================================================
 
 
-elif page=="🤖 AI Recognition":
+elif page=="🧠 Recognition":
 
 
     st.markdown(
-    "## 🤖 AI Face Recognition Module"
-    )
-
-
-    st.write(
     """
-    Upload a person's image.
-    The AI model will detect and recognize the face.
-    """
+    <div class="section-title">
+    🧠 AI Face Recognition Module
+    </div>
+    """,
+    unsafe_allow_html=True
     )
 
 
     uploaded = st.file_uploader(
-        "Upload Image",
+        "Upload a face image",
         type=[
             "jpg",
-            "png",
-            "jpeg"
+            "jpeg",
+            "png"
         ]
     )
 
@@ -365,8 +347,14 @@ elif page=="🤖 AI Recognition":
 
         faces=detector.detectMultiScale(
             gray,
-            1.2,
-            5
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(80,80)
+        )
+
+
+        st.info(
+            f"Faces Detected: {len(faces)}"
         )
 
 
@@ -383,9 +371,16 @@ elif page=="🤖 AI Recognition":
             ]
 
 
+            face=cv2.resize(
+                face,
+                (200,200)
+            )
+
+
             person_id,confidence = recognizer.predict(
                 face
             )
+
 
 
             if confidence < 80:
@@ -438,7 +433,8 @@ elif page=="🤖 AI Recognition":
 
         st.image(
             frame,
-            caption="AI Recognition Result"
+            caption="AI Recognition Result",
+            use_container_width=True
         )
 
 
@@ -463,7 +459,7 @@ elif page=="🤖 AI Recognition":
 
 
             st.success(
-                "✅ Attendance Successfully Marked"
+                "✅ Attendance Generated Successfully"
             )
 
 
@@ -476,49 +472,54 @@ elif page=="🤖 AI Recognition":
         else:
 
             st.warning(
-                "Face not recognized"
+                "No Known Face Found"
             )
 
 
 
-
 # ==================================================
-# DASHBOARD
+# ANALYTICS
 # ==================================================
 
 
-elif page=="📊 Attendance Dashboard":
+elif page=="📊 Analytics":
 
 
     st.markdown(
-    "## 📊 Attendance Analytics"
+    """
+    <div class="section-title">
+    📊 Attendance Analytics
+    </div>
+    """,
+    unsafe_allow_html=True
     )
 
 
     try:
+
 
         df=pd.read_csv(
             "attendance.csv"
         )
 
 
-        col1,col2,col3=st.columns(3)
+        a,b,c=st.columns(3)
 
 
-        col1.metric(
-            "Total Attendance",
+        a.metric(
+            "Total Records",
             len(df)
         )
 
 
-        col2.metric(
-            "Unique Persons",
+        b.metric(
+            "Students",
             df["Name"].nunique()
         )
 
 
-        col3.metric(
-            "Latest Entry",
+        c.metric(
+            "Latest Attendance",
             df.iloc[-1]["Time"]
         )
 
@@ -530,26 +531,26 @@ elif page=="📊 Attendance Dashboard":
         )
 
 
+
         st.download_button(
-            "⬇ Download Report",
+            "⬇ Download Attendance Report",
             df.to_csv(index=False),
             "attendance.csv"
         )
+
 
 
     except:
 
 
         st.info(
-            "No attendance data available"
+            "Attendance data not available"
         )
 
 
 
-
-
 # ==================================================
-# DETAILS
+# PROJECT INFO
 # ==================================================
 
 
@@ -557,45 +558,60 @@ else:
 
 
     st.markdown(
-    "## 🚀 Project Information"
+    """
+    <div class="section-title">
+    🚀 Project Information
+    </div>
+    """,
+    unsafe_allow_html=True
     )
 
 
     st.write(
 """
-### Smart Attendance System Using Face Recognition
+## Technologies Used
+
+🐍 Python
+
+👁 OpenCV
+
+🤖 LBPH Face Recognition
+
+📊 Pandas
+
+🔢 NumPy
+
+🌐 Streamlit
 
 
-### Objective
+## ML Concepts
 
-To create an intelligent attendance system
-that automatically identifies people using
-Artificial Intelligence.
+• Image Processing
 
+• Feature Extraction
 
-### Algorithms
+• Classification
 
-• Haar Cascade Face Detection
-
-• LBPH Face Recognition
+• Model Prediction
 
 
-### Future Improvements
+## Future Improvements
 
-✔ Deep Learning Face Recognition
+✅ CNN Based Recognition
 
-✔ Cloud Database
+✅ FaceNet / DeepFace
 
-✔ Mobile Application
+✅ Cloud Database
 
-✔ Real Time Camera Attendance
+✅ Real Time CCTV Attendance
 
 
-### Developer
+## Developer
 
 **Jhansi Reddy**
 
-AI / ML Engineering Student
+Computer Science Engineering Student
 
+Aspiring AI/ML Engineer
 """
 )
