@@ -5,6 +5,10 @@ import pandas as pd
 import pickle
 from datetime import datetime
 from PIL import Image
+import os
+
+st.write("Current Directory:", os.getcwd())
+st.write("Files in Directory:", os.listdir("."))
 
 # ---------------- PAGE CONFIG ----------------
 
