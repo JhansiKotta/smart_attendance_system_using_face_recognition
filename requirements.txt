@@ -1,0 +1,8 @@
+opencv-python
+opencv-contrib-python
+numpy
+pandas
+Pillow
+matplotlib
+openpyxl
+streamlit
