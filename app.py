@@ -127,7 +127,21 @@ elif menu == "Face Recognition":
 
     st.header("📸 Face Recognition")
 
-    if st.button("Start Camera"):
+    uploaded_file = st.file_uploader(
+        "Upload a Face Image",
+        type=["jpg", "jpeg", "png"]
+    )
+
+    if uploaded_file is not None:
+
+        file_bytes = uploaded_file.read()
+
+        import numpy as np
+
+        image = cv2.imdecode(
+            np.frombuffer(file_bytes, np.uint8),
+            cv2.IMREAD_COLOR
+        )
 
         recognizer = cv2.face.LBPHFaceRecognizer_create()
         recognizer.read("trainer.yml")
@@ -139,94 +153,94 @@ elif menu == "Face Recognition":
             "haarcascade_frontalface_default.xml"
         )
 
-        camera = cv2.VideoCapture(0)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        frame_window = st.image([])
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.2,
+            minNeighbors=5
+        )
 
-        stop = st.button("Stop Camera")
+        if len(faces) == 0:
+            st.warning("No face detected.")
 
-        while camera.isOpened():
+        attendance_file = "attendance.csv"
 
-            ret, frame = camera.read()
-
-            if not ret:
-                st.error("Camera not found.")
-                break
-
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-            faces = face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.2,
-                minNeighbors=5
+        if not os.path.exists(attendance_file):
+            pd.DataFrame(columns=["Name", "Date", "Time"]).to_csv(
+                attendance_file,
+                index=False
             )
 
-            for (x, y, w, h) in faces:
+        df = pd.read_csv(attendance_file)
 
-                label, confidence = recognizer.predict(
-                    gray[y:y+h, x:x+w]
-                )
-                if confidence < 70:
+        for (x, y, w, h) in faces:
 
-                        name = names[label]
-                        color = (0,255,0)
+            label, confidence = recognizer.predict(
+                gray[y:y+h, x:x+w]
+            )
 
-                        attendance_file = "attendance.csv"
+            if confidence < 70:
 
-                        if not os.path.exists(attendance_file):
-                            df = pd.DataFrame(columns=["Name","Date","Time"])
-                            df.to_csv(attendance_file,index=False)
+                name = names[label]
+                color = (0,255,0)
 
-                        now = datetime.now()
+                now = datetime.now()
+                date = now.strftime("%Y-%m-%d")
+                time = now.strftime("%H:%M:%S")
 
-                        date = now.strftime("%Y-%m-%d")
-                        time = now.strftime("%H:%M:%S")
+                already = df[
+                    (df["Name"] == name) &
+                    (df["Date"] == date)
+                ]
 
-                        df = pd.read_csv(attendance_file)
+                if already.empty:
 
-                        already = df[
-                            (df["Name"] == name) &
-                            (df["Date"] == date)
-                        ]
+                    new_row = pd.DataFrame({
+                        "Name":[name],
+                        "Date":[date],
+                        "Time":[time]
+                    })
 
-                        if already.empty:
+                    df = pd.concat(
+                        [df, new_row],
+                        ignore_index=True
+                    )
 
-                            new_row = pd.DataFrame({
-                                "Name":[name],
-                                "Date":[date],
-                                "Time":[time]
-                            })
+                    df.to_csv(
+                        attendance_file,
+                        index=False
+                    )
 
-                            df = pd.concat([df,new_row],ignore_index=True)
+                st.success(f"Attendance Marked : {name}")
 
-                            df.to_csv(attendance_file,index=False)
+            else:
 
-                            st.success(f"Attendance Marked : {name}")
+                name = "Unknown"
+                color = (0,0,255)
 
-                else:
+            cv2.rectangle(
+                image,
+                (x,y),
+                (x+w,y+h),
+                color,
+                2
+            )
 
-                    name = "Unknown"
-                    color = (0,0,255)
-                
+            cv2.putText(
+                image,
+                name,
+                (x,y-10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                color,
+                2
+            )
 
-                cv2.rectangle(frame,(x,y),(x+w,y+h),color,2)
+        image = cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2RGB
+        )
 
-                cv2.putText(
-                    frame,
-                    name,
-                    (x,y-10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    color,
-                    2
-                )
-
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            frame_window.image(frame)
-
-            if stop:
-                break
-
-        camera.release()
+        st.image(image, use_container_width=True)
         
