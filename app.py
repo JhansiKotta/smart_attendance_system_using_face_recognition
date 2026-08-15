@@ -41,7 +41,7 @@ else:
     )
 
 
-# ============================================================
+## ============================================================
 # SIDEBAR
 # ============================================================
 
@@ -56,25 +56,23 @@ with st.sidebar:
     page = st.radio(
         "Navigation",
         [
-    "🏠 Dashboard",
-    "📸 Face Recognition",
-    "📋 Attendance Records",
-    "📊 Analytics",
-    "📈 Attendance Trends",
-    "🔎 Search",
-    "👥 Students",
-    "📥 Reports",
-    "⚙️ System",
-    "ℹ️ About Project"
+            "🏠 Dashboard",
+            "📸 Face Recognition",
+            "📋 Attendance Records",
+            "📊 Analytics",
+            "📈 Attendance Trends",
+            "🔎 Search",
+            "👥 Students",
+            "📥 Reports",
+            "⚙️ System",
+            "ℹ️ About Project"
         ]
-        
+    )
 
     st.divider()
 
     st.caption("Smart Attendance AI")
     st.caption("Face Recognition • Analytics")
-
-
 # ============================================================
 # DASHBOARD
 # ============================================================
