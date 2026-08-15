@@ -1,8 +1,7 @@
-opencv-python
-opencv-contrib-python
-numpy
-pandas
-Pillow
-matplotlib
-openpyxl
 streamlit
+pandas
+numpy
+opencv-contrib-python-headless
+plotly
+Pillow
+scikit-learn
