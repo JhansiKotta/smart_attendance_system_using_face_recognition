@@ -9,7 +9,7 @@ The project combines **Computer Vision, Machine Learning, Data Processing, Visua
 ## 🚀 Live Demo
 
 🔗 **Streamlit Application:**  
-[Open Smart Attendance System](YOUR_STREAMLIT_LINK_HERE)
+[Open Smart Attendance System](https://smartattendancesystemusingfacerecognitiongit-dqbmzh5nenxmt4amj.streamlit.app/)
 
 ---
 
