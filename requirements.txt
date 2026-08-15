@@ -1,8 +1,8 @@
-streamlit
-opencv-python-headless
-opencv-contrib-python-headless
+opencv-python
+opencv-contrib-python
 numpy
 pandas
 Pillow
 matplotlib
 openpyxl
+streamlit
