@@ -1,993 +1,462 @@
-import streamlit as st
-import pandas as pd
-import cv2
+"""
+Smart Attendance AI
+Face-recognition attendance system (Streamlit + OpenCV LBPH).
+
+Environment variables / Streamlit secrets (all optional):
+    ADMIN_PASSWORD        protects Records, Analytics and Students pages
+    APP_TIMEZONE          default "Asia/Kolkata"
+    DATA_DIR              folder for attendance.csv (mount a volume here)
+    CONFIDENCE_THRESHOLD  LBPH distance limit, default 70 (lower = stricter)
+"""
+
+import logging
 import os
 import pickle
+import threading
 from datetime import datetime
-import plotly.express as px
-import plotly.graph_objects as go
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import cv2
 import numpy as np
-
-# ============================================================
-# SMART ATTENDANCE SYSTEM
-# PART 1 — IMPORTS & PROFESSIONAL UI
-# ============================================================
+import pandas as pd
+import plotly.express as px
+import streamlit as st
 
 # ------------------------------------------------------------
-# Page Configuration
+# Configuration
 # ------------------------------------------------------------
-
 st.set_page_config(
     page_title="Smart Attendance AI",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# ------------------------------------------------------------
-# File Paths
-# ------------------------------------------------------------
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("smart-attendance")
 
-ATTENDANCE_FILE = "attendance.csv"
-TRAINER_FILE = "trainer.yml"
-NAMES_FILE = "names.pkl"
-CASCADE_FILE = "haarcascade_frontalface_default.xml"
+BASE_DIR = Path(__file__).parent
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+ATTENDANCE_FILE = DATA_DIR / "attendance.csv"
+TRAINER_FILE = BASE_DIR / "trainer.yml"
+NAMES_FILE = BASE_DIR / "names.pkl"
+CASCADE_FILE = BASE_DIR / "haarcascade_frontalface_default.xml"
+
+COLUMNS = ["Name", "Date", "Time"]
+TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Kolkata"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "70"))
+
+_write_lock = threading.Lock()
+
+
+def get_secret(key: str):
+    """Read from Streamlit secrets first, then environment variables."""
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.getenv(key)
+
 
 # ------------------------------------------------------------
-# Professional Light Theme
+# Theme
 # ------------------------------------------------------------
-
 st.markdown(
     """
     <style>
-
-    /* Main background */
-    .stApp {
-        background-color: #f5f7fb;
-    }
-
-    /* Main content */
-    .block-container {
-        max-width: 1400px;
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-    }
-
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background-color: #111827;
-    }
-
-    section[data-testid="stSidebar"] * {
-        color: white;
-    }
-
-    /* Main headings */
-    h1, h2, h3 {
-        color: #172554;
-    }
-
-    /* Metric cards */
+    .stApp { background-color: #f5f7fb; }
+    .block-container { max-width: 1400px; padding-top: 2rem; padding-bottom: 3rem; }
+    section[data-testid="stSidebar"] { background-color: #111827; }
+    section[data-testid="stSidebar"] * { color: white; }
+    h1, h2, h3 { color: #172554; }
     div[data-testid="stMetric"] {
-        background-color: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 18px;
-        padding: 20px;
+        background-color: white; border: 1px solid #e5e7eb;
+        border-radius: 18px; padding: 20px;
         box-shadow: 0 5px 18px rgba(0,0,0,0.06);
     }
-
-    /* Buttons */
-    .stButton > button {
-        border-radius: 10px;
-        font-weight: 600;
-    }
-
-    /* Data tables */
-    .stDataFrame {
-        border-radius: 12px;
-    }
-
-    /* Hide footer */
-    footer {
-        visibility: hidden;
-    }
-
+    div[data-testid="stMetric"] * { color: #172554; }
+    .stButton > button { border-radius: 10px; font-weight: 600; }
+    footer { visibility: hidden; }
+    #MainMenu { visibility: hidden; }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
+
 # ------------------------------------------------------------
-# Sidebar Branding
+# Data helpers
 # ------------------------------------------------------------
+def load_attendance() -> pd.DataFrame:
+    """Load attendance data; always returns a DataFrame with COLUMNS."""
+    if not ATTENDANCE_FILE.exists():
+        return pd.DataFrame(columns=COLUMNS)
+    try:
+        df = pd.read_csv(ATTENDANCE_FILE)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=COLUMNS)
+    df.columns = df.columns.str.strip()
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    df["Name"] = df["Name"].astype(str).str.strip()
+    return df[COLUMNS]
+
+
+def mark_attendance(name: str) -> bool:
+    """Mark attendance once per student per day. Returns True if newly marked."""
+    now = datetime.now(TIMEZONE)
+    date, time_ = now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")
+
+    with _write_lock:
+        df = load_attendance()
+        if ((df["Name"] == name) & (df["Date"] == date)).any():
+            return False
+        row = pd.DataFrame({"Name": [name], "Date": [date], "Time": [time_]})
+        pd.concat([df, row], ignore_index=True).to_csv(ATTENDANCE_FILE, index=False)
+        log.info("Attendance marked: %s on %s", name, date)
+        return True
+
+
+@st.cache_data(show_spinner=False)
+def _load_names(mtime: float) -> dict:
+    with open(NAMES_FILE, "rb") as f:
+        return pickle.load(f)
+
+
+def get_names() -> dict:
+    if not NAMES_FILE.exists():
+        return {}
+    return _load_names(NAMES_FILE.stat().st_mtime)
+
+
+@st.cache_resource(show_spinner="Loading face recognition model...")
+def _load_models(trainer_mtime: float, cascade_path: str):
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer.read(str(TRAINER_FILE))
+    cascade = cv2.CascadeClassifier(cascade_path)
+    return recognizer, cascade
+
+
+def get_models():
+    """Cached models; reloads automatically if trainer.yml is retrained."""
+    cascade_path = (
+        str(CASCADE_FILE)
+        if CASCADE_FILE.exists()
+        else cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    return _load_models(TRAINER_FILE.stat().st_mtime, cascade_path)
+
+
+# ------------------------------------------------------------
+# Admin protection (only active if ADMIN_PASSWORD is set)
+# ------------------------------------------------------------
+def require_admin() -> bool:
+    password = get_secret("ADMIN_PASSWORD")
+    if not password or st.session_state.get("is_admin"):
+        return True
+
+    st.warning("🔒 This page is restricted to administrators.")
+    entered = st.text_input("Admin password", type="password")
+    if st.button("Login"):
+        if entered == str(password):
+            st.session_state["is_admin"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+
+# ------------------------------------------------------------
+# Sidebar
+# ------------------------------------------------------------
+PAGES = [
+    "🏠 Dashboard",
+    "📸 Face Recognition",
+    "📋 Attendance Records",
+    "📊 Analytics",
+    "👥 Students",
+    "ℹ️ About Project",
+]
 
 with st.sidebar:
-
     st.markdown(
         """
         <div style="text-align:center; padding:15px 5px 20px 5px;">
             <div style="font-size:48px;">🎓</div>
-            <div style="font-size:24px; font-weight:800;">
-                Smart Attendance
-            </div>
-            <div style="font-size:13px; opacity:0.75;">
-                AI Attendance Management
-            </div>
+            <div style="font-size:24px; font-weight:800;">Smart Attendance</div>
+            <div style="font-size:13px; opacity:0.75;">AI Attendance Management</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
     st.divider()
-
-    st.markdown("## 🧭 Navigation")
-
-    menu = st.radio(
-        "Go to",
-        [
-            "🏠 Dashboard",
-            "📸 Face Recognition",
-            "📋 Attendance Records",
-            "📊 Analytics",
-            "👥 Students",
-            "ℹ️ About Project"
-        ],
-        label_visibility="collapsed"
-    )
-
+    menu = st.radio("Go to", PAGES, label_visibility="collapsed")
     st.divider()
-
-    st.caption("Smart Attendance AI")
+    if st.session_state.get("is_admin"):
+        if st.button("Logout", width="stretch"):
+            st.session_state["is_admin"] = False
+            st.rerun()
     st.caption("Face Recognition • Analytics")
-# ============================================================
-# PART 2 — DASHBOARD
-# ============================================================
 
-if menu == "🏠 Dashboard":
 
+# ------------------------------------------------------------
+# Pages
+# ------------------------------------------------------------
+def page_dashboard():
     st.title("🏠 Smart Attendance Dashboard")
-
     st.write(
-        "Welcome to Smart Attendance AI — an intelligent "
-        "attendance management system using face recognition."
+        "An intelligent attendance management system using face recognition."
     )
-
     st.divider()
 
-    # Load attendance data
-    if os.path.exists(ATTENDANCE_FILE):
-        attendance_df = pd.read_csv(ATTENDANCE_FILE)
-    else:
-        attendance_df = pd.DataFrame(
-            columns=["Name", "Date", "Time"]
-        )
+    df = load_attendance()
+    registered = len(set(get_names().values()))
 
-    # Dashboard statistics
-    total_records = len(attendance_df)
-
-    if not attendance_df.empty:
-        total_students = attendance_df["Name"].nunique()
-        total_days = attendance_df["Date"].nunique()
-    else:
-        total_students = 0
-        total_days = 0
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric(
-            "👥 Registered Students",
-            14
-        )
-
-    with col2:
-        st.metric(
-            "📋 Attendance Records",
-            total_records
-        )
-
-    with col3:
-        st.metric(
-            "📅 Attendance Days",
-            total_days
-        )
-
-    with col4:
-        st.metric(
-            "🎯 Recognition Model",
-            "LBPH"
-        )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("👥 Registered Students", registered)
+    c2.metric("📋 Attendance Records", len(df))
+    c3.metric("📅 Attendance Days", df["Date"].nunique() if not df.empty else 0)
+    c4.metric("🎯 Recognition Model", "LBPH")
 
     st.divider()
-
-    # Project overview
     st.subheader("🚀 System Features")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.info(
-            """
-            ### 📸 Face Recognition
-
-            Automatically identifies registered
-            students using OpenCV and LBPH.
-            """
-        )
-
-    with col2:
-        st.success(
-            """
-            ### 📋 Automatic Attendance
-
-            Attendance is recorded automatically
-            with date and time.
-            """
-        )
-
-    with col3:
-        st.warning(
-            """
-            ### 📊 Analytics
-
-            Analyze attendance records using
-            charts and statistics.
-            """
-        )
+    c1, c2, c3 = st.columns(3)
+    c1.info("### 📸 Face Recognition\n\nIdentifies registered students using OpenCV and LBPH.")
+    c2.success("### 📋 Automatic Attendance\n\nAttendance is recorded with date and time.")
+    c3.warning("### 📊 Analytics\n\nAnalyze attendance using charts and statistics.")
 
     st.divider()
-
-    # Recent attendance
     st.subheader("🕒 Recent Attendance")
-
-    if not attendance_df.empty:
-
-        recent_data = attendance_df.tail(10).iloc[::-1]
-
-        st.dataframe(
-            recent_data,
-            use_container_width=True,
-            hide_index=True
-        )
-
+    if df.empty:
+        st.info("No attendance records available yet.")
     else:
+        st.dataframe(df.tail(10).iloc[::-1], hide_index=True)
 
-        st.info(
-            "No attendance records available yet."
-        )
-# ============================================================
-# PART 3 — ATTENDANCE RECORDS
-# ============================================================
 
-elif menu == "📋 Attendance Records":
-
-    st.title("📋 Attendance Records")
-
-    st.write(
-        "View, search and download attendance records."
-    )
-
-    st.divider()
-
-    if os.path.exists(ATTENDANCE_FILE):
-
-        attendance_df = pd.read_csv(
-            ATTENDANCE_FILE
-        )
-
-        if not attendance_df.empty:
-
-            # Search
-            search_name = st.text_input(
-                "🔍 Search Student",
-                placeholder="Enter student name..."
-            )
-
-            filtered_df = attendance_df.copy()
-
-            if search_name:
-
-                filtered_df = filtered_df[
-                    filtered_df["Name"]
-                    .astype(str)
-                    .str.contains(
-                        search_name,
-                        case=False,
-                        na=False
-                    )
-                ]
-
-            # Statistics
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.metric(
-                    "📋 Total Records",
-                    len(filtered_df)
-                )
-
-            with col2:
-                st.metric(
-                    "👥 Students",
-                    filtered_df["Name"].nunique()
-                )
-
-            with col3:
-                st.metric(
-                    "📅 Days",
-                    filtered_df["Date"].nunique()
-                )
-
-            st.divider()
-
-            # Attendance table
-            st.subheader("Attendance Data")
-
-            st.dataframe(
-                filtered_df,
-                use_container_width=True,
-                hide_index=True
-            )
-
-            # Download
-            csv_data = filtered_df.to_csv(
-                index=False
-            ).encode("utf-8")
-
-            st.download_button(
-                "⬇️ Download Attendance CSV",
-                data=csv_data,
-                file_name="attendance_records.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-        else:
-
-            st.info(
-                "Attendance file is empty."
-            )
-
-    else:
-
-        st.warning(
-            "attendance.csv was not found."
-        )
- # ============================================================
-# PART 4 — ATTENDANCE ANALYTICS
-# ============================================================
-
-elif menu == "📊 Analytics":
-
-    st.title("📊 Attendance Analytics")
-
-    st.write(
-        "Analyze attendance patterns and student participation."
-    )
-
-    st.divider()
-
-    if os.path.exists(ATTENDANCE_FILE):
-
-        attendance_df = pd.read_csv(
-            ATTENDANCE_FILE
-        )
-
-        if not attendance_df.empty:
-
-            # ------------------------------------------------
-            # Basic Statistics
-            # ------------------------------------------------
-
-            total_records = len(attendance_df)
-
-            total_students = (
-                attendance_df["Name"].nunique()
-            )
-
-            total_days = (
-                attendance_df["Date"].nunique()
-            )
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.metric(
-                    "📋 Total Attendance",
-                    total_records
-                )
-
-            with col2:
-                st.metric(
-                    "👥 Total Students",
-                    total_students
-                )
-
-            with col3:
-                st.metric(
-                    "📅 Working Days",
-                    total_days
-                )
-
-            st.divider()
-
-            # ------------------------------------------------
-            # Attendance Count by Student
-            # ------------------------------------------------
-
-            st.subheader(
-                "👥 Attendance by Student"
-            )
-
-            student_count = (
-                attendance_df["Name"]
-                .value_counts()
-                .reset_index()
-            )
-
-            student_count.columns = [
-                "Name",
-                "Attendance"
-            ]
-
-            fig_bar = px.bar(
-                student_count,
-                x="Name",
-                y="Attendance",
-                title="Student Attendance Count",
-                text="Attendance"
-            )
-
-            fig_bar.update_layout(
-                xaxis_title="Student",
-                yaxis_title="Attendance",
-                template="plotly_white"
-            )
-
-            st.plotly_chart(
-                fig_bar,
-                use_container_width=True
-            )
-
-            # ------------------------------------------------
-            # Attendance by Date
-            # ------------------------------------------------
-
-            st.subheader(
-                "📅 Daily Attendance"
-            )
-
-            daily_count = (
-                attendance_df["Date"]
-                .value_counts()
-                .sort_index()
-                .reset_index()
-            )
-
-            daily_count.columns = [
-                "Date",
-                "Attendance"
-            ]
-
-            fig_line = px.line(
-                daily_count,
-                x="Date",
-                y="Attendance",
-                markers=True,
-                title="Attendance Trend"
-            )
-
-            fig_line.update_layout(
-                xaxis_title="Date",
-                yaxis_title="Number of Students",
-                template="plotly_white"
-            )
-
-            st.plotly_chart(
-                fig_line,
-                use_container_width=True
-            )
-
-            # ------------------------------------------------
-            # Attendance Distribution
-            # ------------------------------------------------
-
-            st.subheader(
-                "🥧 Attendance Distribution"
-            )
-
-            fig_pie = px.pie(
-                student_count,
-                names="Name",
-                values="Attendance",
-                title="Attendance Distribution"
-            )
-
-            st.plotly_chart(
-                fig_pie,
-                use_container_width=True
-            )
-
-        else:
-
-            st.info(
-                "No attendance data available for analytics."
-            )
-
-    else:
-
-        st.warning(
-            "attendance.csv was not found."
-        )
-# ============================================================
-# PART 5 — FACE RECOGNITION
-# ============================================================
-
-elif menu == "📸 Face Recognition":
-
+def page_recognition():
     st.title("📸 Face Recognition")
-
-    st.write(
-        "Capture a student's face and use the trained LBPH "
-        "model to recognize the student."
-    )
-
+    st.write("Take a photo to recognize a student and mark attendance.")
     st.divider()
 
-    # Check required files
-    required_files = [
-        TRAINER_FILE,
-        NAMES_FILE,
-        CASCADE_FILE
-    ]
+    missing = [f.name for f in (TRAINER_FILE, NAMES_FILE) if not f.exists()]
+    if missing:
+        st.error("Required recognition files are missing:")
+        for f in missing:
+            st.warning(f"⚠️ {f}")
+        return
 
-    missing_files = [
-        file for file in required_files
-        if not os.path.exists(file)
-    ]
+    photo = st.camera_input("📷 Take a photo")
+    if photo is None:
+        return
 
-    if missing_files:
+    frame = cv2.imdecode(
+        np.frombuffer(photo.getvalue(), dtype=np.uint8), cv2.IMREAD_COLOR
+    )
+    if frame is None:
+        st.error("Could not read the image. Please try again.")
+        return
 
-        st.error(
-            "Required recognition files are missing."
-        )
+    try:
+        recognizer, cascade = get_models()
+    except Exception:
+        log.exception("Failed to load models")
+        st.error("The recognition model could not be loaded. Re-train and try again.")
+        return
 
-        for file in missing_files:
-            st.warning(f"⚠️ {file}")
+    names = get_names()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = cascade.detectMultiScale(
+        gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60)
+    )
 
-    else:
+    if len(faces) == 0:
+        st.warning("No face detected. Face the camera in good light and retry.")
+        return
 
-        camera_image = st.camera_input(
-            "📷 Take a photo"
-        )
+    recognized_any = False
+    for (x, y, w, h) in faces:
+        label, confidence = recognizer.predict(gray[y:y + h, x:x + w])
 
-        if camera_image is not None:
+        if confidence < CONFIDENCE_THRESHOLD and label in names:
+            name = names[label]
+            recognized_any = True
+            colour, text = (0, 180, 0), name
 
-            image_bytes = camera_image.getvalue()
-
-            image_array = np.frombuffer(
-                image_bytes,
-                dtype=np.uint8
-            )
-
-            frame = cv2.imdecode(
-                image_array,
-                cv2.IMREAD_COLOR
-            )
-
-            gray = cv2.cvtColor(
-                frame,
-                cv2.COLOR_BGR2GRAY
-            )
-
-            # Load recognizer
-            recognizer = (
-                cv2.face.LBPHFaceRecognizer_create()
-            )
-
-            recognizer.read(TRAINER_FILE)
-
-            # Load names
-            with open(NAMES_FILE, "rb") as f:
-                names = pickle.load(f)
-
-            # Load Haar Cascade
-            face_cascade = cv2.CascadeClassifier(
-                CASCADE_FILE
-            )
-
-            faces = face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.2,
-                minNeighbors=5
-            )
-
-            if len(faces) == 0:
-
-                st.warning(
-                    "No face detected. Please try again."
-                )
-
+            if mark_attendance(name):
+                st.success(f"✅ Attendance marked for {name}")
             else:
+                st.info(f"ℹ️ {name} is already marked present today.")
+        else:
+            colour, text = (0, 0, 255), "Unknown"
 
-                recognized = False
+        cv2.rectangle(frame, (x, y), (x + w, y + h), colour, 2)
+        cv2.putText(
+            frame, text, (x, max(y - 10, 20)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, colour, 2,
+        )
 
-                for (x, y, w, h) in faces:
-
-                    face = gray[
-                        y:y + h,
-                        x:x + w
-                    ]
-
-                    label, confidence = (
-                        recognizer.predict(face)
-                    )
-
-                    if confidence < 70:
-
-                        name = names.get(
-                            label,
-                            "Unknown"
-                        )
-
-                        recognized = True
-
-                        cv2.rectangle(
-                            frame,
-                            (x, y),
-                            (x + w, y + h),
-                            (0, 180, 0),
-                            2
-                        )
-
-                        cv2.putText(
-                            frame,
-                            name,
-                            (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8,
-                            (0, 180, 0),
-                            2
-                        )
-
-                        # Create attendance file
-                        if not os.path.exists(
-                            ATTENDANCE_FILE
-                        ):
-
-                            pd.DataFrame(
-                                columns=[
-                                    "Name",
-                                    "Date",
-                                    "Time"
-                                ]
-                            ).to_csv(
-                                ATTENDANCE_FILE,
-                                index=False
-                            )
-
-                        attendance_df = pd.read_csv(
-                            ATTENDANCE_FILE
-                        )
-
-                        now = datetime.now()
-
-                        date = now.strftime(
-                            "%Y-%m-%d"
-                        )
-
-                        time = now.strftime(
-                            "%H:%M:%S"
-                        )
-
-                        already_present = (
-                            (attendance_df["Name"] == name)
-                            &
-                            (attendance_df["Date"] == date)
-                        )
-
-                        if not already_present.any():
-
-                            new_record = pd.DataFrame({
-                                "Name": [name],
-                                "Date": [date],
-                                "Time": [time]
-                            })
-
-                            attendance_df = pd.concat(
-                                [
-                                    attendance_df,
-                                    new_record
-                                ],
-                                ignore_index=True
-                            )
-
-                            attendance_df.to_csv(
-                                ATTENDANCE_FILE,
-                                index=False
-                            )
-
-                            st.success(
-                                f"✅ Attendance marked for {name}"
-                            )
-
-                        else:
-
-                            st.info(
-                                f"ℹ️ {name} is already marked "
-                                f"present today."
-                            )
-
-                    else:
-
-                        cv2.rectangle(
-                            frame,
-                            (x, y),
-                            (x + w, y + h),
-                            (0, 0, 255),
-                            2
-                        )
-
-                        cv2.putText(
-                            frame,
-                            "Unknown",
-                            (x, y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8,
-                            (0, 0, 255),
-                            2
-                        )
-
-                # Display result
-                result = cv2.cvtColor(
-                    frame,
-                    cv2.COLOR_BGR2RGB
-                )
-
-                st.image(
-                    result,
-                    caption="Recognition Result",
-                    use_container_width=True
-                )
-
-                if not recognized:
-
-                    st.warning(
-                        "Face detected, but the person "
-                        "could not be recognized."
-                    ) 
-# ============================================================
-# PART 6 — STUDENTS
-# ============================================================
-
-elif menu == "👥 Students":
-
-    st.title("👥 Registered Students")
-
-    st.write(
-        "View students registered in the face recognition system."
+    st.image(
+        cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+        caption="Recognition Result",
+        width="stretch",
     )
+    if not recognized_any:
+        st.warning("Face detected, but the person could not be recognized.")
+
+
+def page_records():
+    st.title("📋 Attendance Records")
+    st.write("View, search and download attendance records.")
+    st.divider()
+    if not require_admin():
+        return
+
+    df = load_attendance()
+    if df.empty:
+        st.info("No attendance records yet.")
+        return
+
+    c1, c2 = st.columns([2, 1])
+    search = c1.text_input("🔍 Search Student", placeholder="Enter student name...")
+    dates = sorted(df["Date"].unique(), reverse=True)
+    chosen = c2.selectbox("📅 Date", ["All dates"] + dates)
+
+    filtered = df
+    if search:
+        filtered = filtered[filtered["Name"].str.contains(search, case=False, na=False)]
+    if chosen != "All dates":
+        filtered = filtered[filtered["Date"] == chosen]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("📋 Total Records", len(filtered))
+    c2.metric("👥 Students", filtered["Name"].nunique())
+    c3.metric("📅 Days", filtered["Date"].nunique())
 
     st.divider()
-
-    if os.path.exists(NAMES_FILE):
-
-        with open(NAMES_FILE, "rb") as f:
-            names = pickle.load(f)
-
-        student_names = list(names.values())
-
-        # Remove duplicates
-        student_names = sorted(
-            set(student_names)
-        )
-
-        search_student = st.text_input(
-            "🔍 Search Student",
-            placeholder="Enter student name..."
-        )
-
-        if search_student:
-
-            displayed_students = [
-                student
-                for student in student_names
-                if search_student.lower()
-                in student.lower()
-            ]
-
-        else:
-
-            displayed_students = student_names
-
-        st.write(
-            f"**{len(displayed_students)} students found**"
-        )
-
-        if displayed_students:
-
-            columns = st.columns(3)
-
-            for index, student in enumerate(
-                displayed_students
-            ):
-
-                with columns[index % 3]:
-
-                    if os.path.exists(
-                        ATTENDANCE_FILE
-                    ):
-
-                        student_df = pd.read_csv(
-                            ATTENDANCE_FILE
-                        )
-
-                        student_records = (
-                            student_df[
-                                student_df["Name"]
-                                .astype(str)
-                                == student
-                            ]
-                        )
-
-                        attendance_count = len(
-                            student_records
-                        )
-
-                    else:
-
-                        attendance_count = 0
-
-                    st.info(
-                        f"""
-                        ### 🎓 {student}
-
-                        **Attendance Records:**  
-                        {attendance_count}
-
-                        **Recognition:**  
-                        LBPH Face Recognition
-                        """
-                    )
-
-        else:
-
-            st.warning(
-                "No student found."
-            )
-
-    else:
-
-        st.warning(
-            "names.pkl was not found."
-        )
-# ============================================================
-# PART 7 — ABOUT PROJECT
-# ============================================================
-
-elif menu == "ℹ️ About Project":
-
-    st.title("ℹ️ About Smart Attendance AI")
-
-    st.write(
-        "Smart Attendance AI is a face-recognition-based "
-        "attendance management system."
+    st.dataframe(filtered, hide_index=True)
+    st.download_button(
+        "⬇️ Download Attendance CSV",
+        data=filtered.to_csv(index=False).encode("utf-8"),
+        file_name="attendance_records.csv",
+        mime="text/csv",
+        width="stretch",
     )
 
+
+def page_analytics():
+    st.title("📊 Attendance Analytics")
+    st.write("Analyze attendance patterns and student participation.")
+    st.divider()
+    if not require_admin():
+        return
+
+    df = load_attendance()
+    if df.empty:
+        st.info("No attendance data available for analytics.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("📋 Total Attendance", len(df))
+    c2.metric("👥 Total Students", df["Name"].nunique())
+    c3.metric("📅 Working Days", df["Date"].nunique())
+    st.divider()
+
+    per_student = df["Name"].value_counts().reset_index()
+    per_student.columns = ["Name", "Attendance"]
+
+    st.subheader("👥 Attendance by Student")
+    fig = px.bar(per_student, x="Name", y="Attendance", text="Attendance")
+    fig.update_layout(template="plotly_white", xaxis_title="Student")
+    st.plotly_chart(fig)
+
+    st.subheader("📅 Daily Attendance")
+    daily = df["Date"].value_counts().sort_index().reset_index()
+    daily.columns = ["Date", "Attendance"]
+    fig = px.line(daily, x="Date", y="Attendance", markers=True)
+    fig.update_layout(template="plotly_white", yaxis_title="Students Present")
+    st.plotly_chart(fig)
+
+    st.subheader("🥧 Attendance Distribution")
+    st.plotly_chart(px.pie(per_student, names="Name", values="Attendance"))
+
+
+def page_students():
+    st.title("👥 Registered Students")
+    st.write("Students registered in the face recognition system.")
+    st.divider()
+    if not require_admin():
+        return
+
+    names = get_names()
+    if not names:
+        st.warning("names.pkl was not found or is empty.")
+        return
+
+    students = sorted(set(names.values()))
+    search = st.text_input("🔍 Search Student", placeholder="Enter student name...")
+    if search:
+        students = [s for s in students if search.lower() in s.lower()]
+
+    st.write(f"**{len(students)} students found**")
+    if not students:
+        st.warning("No student found.")
+        return
+
+    counts = load_attendance()["Name"].value_counts().to_dict()
+    cols = st.columns(3)
+    for i, student in enumerate(students):
+        cols[i % 3].info(
+            f"### 🎓 {student}\n\n"
+            f"**Attendance Records:** {counts.get(student, 0)}\n\n"
+            f"**Recognition:** LBPH Face Recognition"
+        )
+
+
+def page_about():
+    st.title("ℹ️ About Smart Attendance AI")
+    st.write("A face-recognition-based attendance management system.")
     st.divider()
 
     st.subheader("🎯 Project Objective")
-
     st.write(
-        "The system automatically recognizes registered "
-        "students and records their attendance with the "
-        "current date and time."
+        "The system automatically recognizes registered students and records "
+        "their attendance with the current date and time."
     )
 
     st.subheader("🧠 Technologies Used")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.info(
-            """
-            ### 🐍 Python
-
-            Core programming language used
-            to develop the application.
-            """
-        )
-
-    with col2:
-
-        st.info(
-            """
-            ### 👁️ OpenCV
-
-            Used for face detection and
-            face recognition.
-            """
-        )
-
-    with col3:
-
-        st.info(
-            """
-            ### 📊 Pandas
-
-            Used for attendance data
-            management and analysis.
-            """
-        )
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.success(
-            """
-            ### 🎯 LBPH
-
-            Local Binary Pattern Histogram
-            face recognition algorithm.
-            """
-        )
-
-    with col2:
-
-        st.success(
-            """
-            ### 📈 Plotly
-
-            Used to create interactive
-            attendance charts.
-            """
-        )
-
-    with col3:
-
-        st.success(
-            """
-            ### 🌐 Streamlit
-
-            Used to create the web
-            application interface.
-            """
-        )
+    c1, c2, c3 = st.columns(3)
+    c1.info("### 🐍 Python\n\nCore programming language.")
+    c2.info("### 👁️ OpenCV\n\nFace detection and recognition.")
+    c3.info("### 📊 Pandas\n\nAttendance data management.")
+    c1, c2, c3 = st.columns(3)
+    c1.success("### 🎯 LBPH\n\nLocal Binary Pattern Histogram algorithm.")
+    c2.success("### 📈 Plotly\n\nInteractive attendance charts.")
+    c3.success("### 🌐 Streamlit\n\nWeb application interface.")
 
     st.divider()
-
     st.subheader("✨ Main Features")
-
-    st.write(
-        """
-        ✅ Face Recognition
-
-        ✅ Automatic Attendance
-
-        ✅ Date and Time Recording
-
-        ✅ Attendance Records
-
-        ✅ Student Search
-
-        ✅ Attendance Analytics
-
-        ✅ Interactive Charts
-
-        ✅ CSV Download
-        """
+    st.markdown(
+        "- ✅ Face Recognition\n- ✅ Automatic Attendance\n"
+        "- ✅ Date and Time Recording\n- ✅ Searchable Records\n"
+        "- ✅ Attendance Analytics\n- ✅ CSV Download"
     )
-# ============================================================
-# PART 8 — APPLICATION FOOTER
-# ============================================================
+
+
+ROUTES = {
+    "🏠 Dashboard": page_dashboard,
+    "📸 Face Recognition": page_recognition,
+    "📋 Attendance Records": page_records,
+    "📊 Analytics": page_analytics,
+    "👥 Students": page_students,
+    "ℹ️ About Project": page_about,
+}
+
+ROUTES[menu]()
 
 st.divider()
-
-st.caption(
-    "🎓 Smart Attendance AI  •  "
-    "Face Recognition  •  "
-    "Automated Attendance  •  "
-    "Data Analytics"
-)                    
+st.caption("🎓 Smart Attendance AI • Face Recognition • Automated Attendance • Data Analytics")
